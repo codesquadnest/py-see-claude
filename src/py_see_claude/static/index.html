@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>See Claude</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="container">
+  <div class="header">
+    <h1>See Claude</h1>
+    <div class="count" id="count">-</div>
+    <div class="subtitle"><span class="live-dot"></span>active sessions <span class="live-badge">LIVE</span></div>
+  </div>
+
+  <div class="top-bar">
+    <input class="search-bar" id="search-input" type="text" placeholder="search sessions...">
+    <label class="sound-toggle"><input type="checkbox" id="sound-toggle">sound</label>
+    <div class="view-toggle">
+      <button class="view-btn active" id="vbtn-terminal" onclick="setView('terminal')">terminals</button>
+      <button class="view-btn" id="vbtn-pixel" onclick="setView('pixel')">pixel</button>
+    </div>
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle dark/light theme">&#9790;</button>
+  </div>
+
+  <div id="live-section">
+    <div class="section-title"><span>Running Now</span><button class="new-session-btn" onclick="showNewSession(event)">+ NEW SESSION</button></div>
+    <div id="grouped-grid"></div>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div class="pixel-view" id="pixel-view">
+    <div class="section-title"><span>Running Now</span><button class="new-session-btn" onclick="showNewSession(event)">+ NEW SESSION</button></div>
+    <div class="pixel-office">
+      <div class="office-wall"></div>
+      <div class="office-poster">~</div>
+      <div class="office-window">
+        <div class="office-window-sky" id="office-sky"></div>
+        <div class="office-window-frame"></div>
+        <div class="office-window-frame-h"></div>
+      </div>
+      <div class="office-clock" id="office-clock"></div>
+      <div class="office-floor-line"></div>
+      <div class="pixel-floor" id="pixel-floor"></div>
+    </div>
+  </div>
+
+  <div class="recent-section">
+    <div class="section-title recent-toggle" onclick="toggleRecent()">
+      <span class="arrow collapsed" id="recent-arrow">&#9660;</span>
+      Recent Sessions
+    </div>
+    <div class="recent-body-wrap collapsed" id="recent-wrap">
+      <div class="skip-perms-bar">
+        <input type="checkbox" id="skip-perms-toggle">
+        <label for="skip-perms-toggle">--dangerously-skip-permissions</label>
+      </div>
+      <table class="recent-table">
+        <thead><tr><th>Project</th><th>First Message</th><th>Last Active</th><th></th></tr></thead>
+        <tbody id="recent-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer">auto-updates via server-sent events</div>
+</div>
+
+<div class="modal-overlay" id="new-modal" onclick="if(event.target===this)closeNewSession()">
+  <div class="modal">
+    <h2>New Claude Session</h2>
+    <div class="modal-field">
+      <label>Project directory</label>
+      <input class="modal-input" id="new-dir" value="">
+      <div class="dir-browser" id="dir-browser"></div>
+      <div style="margin-top:6px;display:flex;gap:6px">
+        <input class="modal-input" id="new-folder-name" placeholder="new folder name" style="font-size:11px;padding:6px 8px">
+        <button class="btn btn-send" onclick="createFolder()" style="padding:6px 10px;font-size:9px">create</button>
+      </div>
+    </div>
+    <div class="modal-field">
+      <label>First message to Claude (optional - leave blank for empty session)</label>
+      <input class="modal-input" id="new-prompt" placeholder="e.g. fix the failing tests">
+    </div>
+    <div class="modal-check">
+      <input type="checkbox" id="new-skip-perms">
+      <label for="new-skip-perms">--dangerously-skip-permissions</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-close" onclick="closeNewSession()">cancel</button>
+      <button class="btn btn-terminal" onclick="launchNewSession()">launch</button>
+    </div>
+  </div>
+</div>
+
+<div class="pixel-modal-overlay" id="pixel-modal" onclick="if(event.target===this)closePixelDialog()">
+  <div class="pixel-dialog">
+    <div class="pixel-dialog-header">
+      <div class="project-name" id="pxd-project"></div>
+      <span class="screen-status" id="pxd-status"></span>
+    </div>
+    <div class="msg-history" id="pxd-history" style="flex:1;max-height:350px"></div>
+    <div class="expanded-actions" style="margin-top:8px">
+      <input class="chat-input" id="pxd-input" placeholder="send a message..." onkeydown="if(event.key==='Enter')sendPixelMsg(event)">
+      <button class="btn btn-send" onclick="sendPixelMsg(event)">send</button>
+      <button class="btn btn-terminal" onclick="pixelOpenTerminal(event)">terminal</button>
+      <button class="btn btn-close" onclick="closePixelDialog()">close</button>
+      <span class="sent-flash" id="pxd-sent">sent!</span>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="group-modal" onclick="if(event.target===this)closeGroupModal()">
+  <div class="modal">
+    <h2>Assign Group</h2>
+    <div class="modal-field">
+      <label>Group name</label>
+      <input class="modal-input" id="group-name-input" placeholder="e.g. backend, frontend">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-close" onclick="closeGroupModal()">cancel</button>
+      <button class="btn btn-send" onclick="saveGroup()">save</button>
+    </div>
+  </div>
+</div>
+
+<div class="copy-toast" id="toast">Copied</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
