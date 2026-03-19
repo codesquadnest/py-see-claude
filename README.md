@@ -71,6 +71,58 @@ The Docker setup is designed for **Linux hosts** where Claude Code runs directly
 |---------------------|---------|-------------|
 | `PORT` | `3456` | Server listen port |
 | `CLAUDE_HOME` | `~/.claude` | Path to Claude data directory |
+| `SEE_CLAUDE_AUTH` | *(none)* | HTTP Basic Auth credentials (`user:pass`) |
+| `SEE_CLAUDE_REMOTES` | *(none)* | Multi-machine remotes (`name=host:port,...`) |
+
+## Multi-Machine / Remote Sessions
+
+You can monitor Claude Code sessions running on remote machines from a single local dashboard. Each remote runs its own `py-see-claude` instance, and your local dashboard connects to them over HTTP.
+
+### Setup
+
+**1. Start `py-see-claude` on each remote machine:**
+
+```bash
+# On remote-server-1
+uv run py-see-claude          # listens on :3456 by default
+PORT=4000 uv run py-see-claude  # or use a custom port
+```
+
+**2. Configure your local dashboard to discover the remotes:**
+
+```bash
+SEE_CLAUDE_REMOTES="server1=remote-host-1:3456,server2=remote-host-2:3456" uv run py-see-claude
+```
+
+The format is `name=host:port` entries separated by commas. The local dashboard fetches `/api/config` to discover remotes, then queries each remote's API directly from the browser.
+
+### Using SSH Tunnels
+
+If remote ports aren't directly accessible (firewall, private network), use SSH port forwarding:
+
+```bash
+# Forward remote :3456 to local :13456
+ssh -L 13456:localhost:3456 user@remote-host-1 -N &
+
+# Forward another remote
+ssh -L 13457:localhost:3456 user@remote-host-2 -N &
+
+# Point your local dashboard at the tunnels
+SEE_CLAUDE_REMOTES="server1=localhost:13456,server2=localhost:13457" uv run py-see-claude
+```
+
+This gives you SSH encryption and authentication without needing native SSH support in the tool.
+
+### Securing Remote Instances
+
+When exposing a remote instance (with or without tunnels), you can enable HTTP Basic Auth:
+
+```bash
+# On the remote machine
+SEE_CLAUDE_AUTH="user:pass" uv run py-see-claude
+```
+
+The browser will prompt for credentials when connecting to that remote. Uses HMAC comparison to prevent timing attacks.
 
 ## How It Works
 

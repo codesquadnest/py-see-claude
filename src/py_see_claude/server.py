@@ -25,10 +25,10 @@ from py_see_claude.terminal import focus_terminal, launch_session, new_session, 
 PORT = int(os.environ.get("PORT", "3456"))
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Feature 6: Optional HTTP Basic Auth
+# Optional HTTP Basic Auth
 AUTH_CREDENTIALS = os.environ.get("SEE_CLAUDE_AUTH", "")
 
-# Feature 5: Multi-machine remotes
+# Optional multi-machine remotes
 REMOTES_RAW = os.environ.get("SEE_CLAUDE_REMOTES", "")
 
 
