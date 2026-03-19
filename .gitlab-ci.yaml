@@ -1,0 +1,33 @@
+include:
+  - project: 'qa-research/services/autodevops'
+    ref: '${CI_REF}'
+    file: '/tools/python-multi-tox.yml'
+
+stages:
+  - pre-build
+  - test
+
+variables:
+  TOX_ENV: py313,py314,quality
+  UV_CACHE_DIR: "$CI_PROJECT_DIR/.cache/uv"
+  UV_PYTHON_INSTALL_DIR: /home/ciuser/.local/bin
+
+cache:
+  paths:
+    - .cache/pip
+    - .venv/
+
+# Disable inherited pre-build jobs not applicable to this project
+GPT Code Review:
+  rules:
+    - when: never
+
+code_quality_yapf_isort:
+  rules:
+    - when: never
+
+# Tox Tests job (from template)
+Tox Tests:
+  stage: test
+  variables:
+    UV_CACHE_DIR: /tmp/uv-cache
