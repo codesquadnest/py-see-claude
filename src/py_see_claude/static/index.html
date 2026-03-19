@@ -111,6 +111,25 @@
   </div>
 </div>
 
+<div class="pixel-modal-overlay" id="history-modal" onclick="if(event.target===this)closeHistoryDialog()">
+  <div class="pixel-dialog history-dialog">
+    <div class="pixel-dialog-header">
+      <div class="project-name" id="hd-project"></div>
+      <span class="screen-status hd-meta" id="hd-meta"></span>
+    </div>
+    <div class="msg-history" id="hd-history" style="flex:1;max-height:500px">
+      <div class="hd-loading">Loading...</div>
+    </div>
+    <div class="expanded-actions" style="margin-top:8px">
+      <input class="chat-input" id="hd-input" placeholder="send a message..." onkeydown="if(event.key==='Enter')sendHistoryMsg(event)">
+      <button class="btn btn-send" onclick="sendHistoryMsg(event)">send</button>
+      <button class="btn btn-terminal" onclick="openHistoryTerminal(event)">terminal</button>
+      <button class="btn btn-close" onclick="closeHistoryDialog()">close</button>
+      <span class="sent-flash" id="hd-sent">sent!</span>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="group-modal" onclick="if(event.target===this)closeGroupModal()">
   <div class="modal">
     <h2>Assign Group</h2>

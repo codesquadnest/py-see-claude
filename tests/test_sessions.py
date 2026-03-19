@@ -7,9 +7,11 @@ import time
 from typing import TYPE_CHECKING
 
 from py_see_claude.sessions import (
+    _cwd_to_dir_key,
     format_time_ago,
     get_project_roster,
     get_recent_sessions,
+    get_session_history,
     get_session_messages,
     parse_project_name,
 )
@@ -127,6 +129,107 @@ class TestGetRecentSessions:
             )
         sessions = get_recent_sessions(limit=3)
         assert len(sessions) == 3
+
+
+class TestCwdToDirKey:
+    def test_simple_path(self) -> None:
+        assert _cwd_to_dir_key("/Users/alice/Projects/myapp") == "-Users-alice-Projects-myapp"
+
+    def test_path_with_dots(self) -> None:
+        assert (
+            _cwd_to_dir_key("/Users/pedro.baptista/Workspace/app")
+            == "-Users-pedro-baptista-Workspace-app"
+        )
+
+    def test_multiple_dots(self) -> None:
+        assert _cwd_to_dir_key("/home/a.b.c/proj") == "-home-a-b-c-proj"
+
+
+class TestGetSessionHistory:
+    def test_reads_full_history(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        msgs = get_session_history(cwd)
+        assert len(msgs) == 5
+        assert msgs[0].role == "user"
+        assert msgs[0].text == "fix the failing tests"
+        assert msgs[1].role == "assistant"
+        assert msgs[1].text == "I'll look at the tests now."
+
+    def test_with_session_id(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        msgs = get_session_history(cwd, session_id="abc123")
+        assert len(msgs) == 5
+
+    def test_invalid_session_id(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        assert get_session_history(cwd, session_id="../etc/passwd") == []
+        assert get_session_history(cwd, session_id="foo/bar") == []
+        assert get_session_history(cwd, session_id="foo\\bar") == []
+
+    def test_nonexistent_session_id(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        assert get_session_history(cwd, session_id="nonexistent") == []
+
+    def test_empty_cwd(self, tmp_claude_dir: Path) -> None:
+        assert get_session_history("") == []
+
+    def test_nonexistent_project(self, tmp_claude_dir: Path) -> None:
+        assert get_session_history("/nonexistent/path") == []
+
+    def test_respects_count_limit(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        msgs = get_session_history(cwd, count=2)
+        assert len(msgs) == 2
+
+    def test_handles_tool_use(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        msgs = get_session_history(cwd)
+        tool_msgs = [m for m in msgs if m.has_tool_use]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0].text == "(using tools...)"
+
+    def test_handles_tool_result(self, sample_session_file: Path) -> None:
+        cwd = "/Users/testuser/Projects/myapp"
+        msgs = get_session_history(cwd)
+        result_msgs = [m for m in msgs if m.has_tool_result]
+        assert len(result_msgs) == 1
+        assert result_msgs[0].text == "(tool result)"
+
+    def test_truncates_long_text(self, tmp_claude_dir: Path) -> None:
+        projects_dir = tmp_claude_dir / "projects"
+        proj_dir = projects_dir / "-Users-testuser-Projects-myapp"
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        long_text = "x" * 2000
+        f = proj_dir / "sess1.jsonl"
+        f.write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": long_text}}) + "\n"
+        )
+        msgs = get_session_history("/Users/testuser/Projects/myapp")
+        assert len(msgs) == 1
+        assert len(msgs[0].text) == 1000
+
+    def test_skips_subagent_files(self, tmp_claude_dir: Path) -> None:
+        projects_dir = tmp_claude_dir / "projects"
+        proj_dir = projects_dir / "-Users-testuser-Projects-myapp"
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        subagent = proj_dir / "subagent-abc.jsonl"
+        subagent.write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": "subagent msg"}})
+            + "\n"
+        )
+        assert get_session_history("/Users/testuser/Projects/myapp") == []
+
+    def test_dotted_username_path(self, tmp_claude_dir: Path) -> None:
+        projects_dir = tmp_claude_dir / "projects"
+        proj_dir = projects_dir / "-Users-pedro-baptista-Workspace-app"
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        f = proj_dir / "sess1.jsonl"
+        f.write_text(
+            json.dumps({"type": "user", "message": {"role": "user", "content": "hello"}}) + "\n"
+        )
+        msgs = get_session_history("/Users/pedro.baptista/Workspace/app")
+        assert len(msgs) == 1
+        assert msgs[0].text == "hello"
 
 
 class TestGetProjectRoster:

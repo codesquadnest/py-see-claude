@@ -472,7 +472,7 @@ function renderStationCard(s, newPids) {
           <div class="expanded-actions">
             <input class="chat-input" id="input-${s.pid}" placeholder="send a message..." onkeydown="if(event.key==='Enter')sendMsg('${realTty}','${s.pid}','${escapeHtml(s.cwd)}',event)" onclick="event.stopPropagation()">
             <button class="btn btn-send" onclick="sendMsg('${realTty}','${s.pid}','${escapeHtml(s.cwd)}',event)" onmousedown="event.preventDefault()">send</button>
-            <button class="btn btn-terminal" onclick="openTerminal('${realTty}','${s.pid}','${escapeHtml(s.cwd)}',event)">terminal</button>
+            <button class="btn btn-terminal" onclick="openHistoryDialog('${escapeHtml(s.cwd)}','${escapeHtml(s.projectName)}','${realTty}','${s.pid}',event)">history</button>
             <button class="btn btn-close" onclick="collapseCard(event)">close</button>
             <span class="sent-flash" id="sent-${s.pid}">sent!</span>
           </div>
@@ -1407,6 +1407,123 @@ setInterval(() => {
   }
 }, 400);
 
+// --- History dialog ---
+let historySession = null;
+
+async function openHistoryDialog(cwd, projectName, tty, pid, event) {
+  if (event) event.stopPropagation();
+
+  historySession = { cwd, projectName, tty, pid };
+  document.getElementById('hd-project').textContent = projectName;
+
+  const statusEl = document.getElementById('hd-meta');
+  const all = getMergedLive();
+  const session = all.find(s => s.pid === pid);
+  if (session) {
+    statusEl.textContent = getStatusLabel(session.status);
+    statusEl.style.color = getStatusColor(session.status);
+  } else {
+    statusEl.textContent = '';
+  }
+
+  document.getElementById('hd-history').innerHTML = '<div class="hd-loading">Loading...</div>';
+  document.getElementById('hd-input').value = '';
+  document.getElementById('history-modal').classList.add('visible');
+
+  try {
+    const r = await fetch('/api/history?cwd=' + encodeURIComponent(cwd));
+    const data = await r.json();
+    const hist = document.getElementById('hd-history');
+    if (data.ok && data.messages.length > 0) {
+      hist.innerHTML = data.messages.map(m => `
+        <div class="msg-bubble ${m.role}">
+          <span class="msg-role">${m.role === 'assistant' ? 'Claude' : 'You'}</span>
+          <div class="msg-text">${escapeHtml(m.text)}</div>
+        </div>
+      `).join('');
+      hist.scrollTop = hist.scrollHeight;
+    } else {
+      hist.innerHTML = '<div class="hd-loading">No messages found</div>';
+    }
+  } catch (e) {
+    document.getElementById('hd-history').innerHTML = '<div class="hd-loading">Failed to load history</div>';
+  }
+
+  setTimeout(() => document.getElementById('hd-input').focus(), 100);
+}
+
+let historyRefreshPending = false;
+
+async function refreshHistoryDialog(merged) {
+  if (!historySession || historyRefreshPending) return;
+  // Don't refresh while user is typing
+  if (document.activeElement?.id === 'hd-input' && document.getElementById('hd-input').value) return;
+
+  // Update status from live data
+  const session = merged.find(s => s.pid === historySession.pid);
+  const statusEl = document.getElementById('hd-meta');
+  if (session) {
+    statusEl.textContent = getStatusLabel(session.status);
+    statusEl.style.color = getStatusColor(session.status);
+  }
+
+  // Re-fetch full history
+  historyRefreshPending = true;
+  try {
+    const r = await fetch('/api/history?cwd=' + encodeURIComponent(historySession.cwd));
+    const data = await r.json();
+    if (!historySession) return; // dialog was closed during fetch
+    const hist = document.getElementById('hd-history');
+    if (data.ok && data.messages.length > 0) {
+      const wasAtBottom = hist.scrollTop + hist.clientHeight >= hist.scrollHeight - 30;
+      hist.innerHTML = data.messages.map(m => `
+        <div class="msg-bubble ${m.role}">
+          <span class="msg-role">${m.role === 'assistant' ? 'Claude' : 'You'}</span>
+          <div class="msg-text">${escapeHtml(m.text)}</div>
+        </div>
+      `).join('');
+      if (wasAtBottom) hist.scrollTop = hist.scrollHeight;
+    }
+  } catch (e) { /* ignore refresh errors */ }
+  finally { historyRefreshPending = false; }
+}
+
+function closeHistoryDialog() {
+  document.getElementById('history-modal').classList.remove('visible');
+  historySession = null;
+}
+
+async function openHistoryTerminal(event) {
+  event.stopPropagation();
+  if (!historySession || !historySession.tty) return;
+  try { await fetch('/api/focus?tty=' + encodeURIComponent(historySession.tty) + '&pid=' + encodeURIComponent(historySession.pid) + '&cwd=' + encodeURIComponent(historySession.cwd || '')); } catch (e) { /* ignore */ }
+}
+
+async function sendHistoryMsg(event) {
+  event.stopPropagation();
+  if (!historySession || !historySession.tty) return;
+  const input = document.getElementById('hd-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  try {
+    const res = await fetch('/api/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tty: historySession.tty, message: msg, cwd: historySession.cwd || '' }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      input.value = '';
+      const sent = document.getElementById('hd-sent');
+      sent.textContent = 'sent to terminal!';
+      sent.classList.add('visible');
+      setTimeout(() => sent.classList.remove('visible'), 2500);
+    } else {
+      showToast('Failed to send: ' + (data.error || 'unknown'));
+    }
+  } catch (e) { showToast('Failed to send'); }
+}
+
 // --- SSE ---
 let lastData = null;
 
@@ -1444,6 +1561,9 @@ function connectSSE() {
         } else {
           closePixelDialog();
         }
+      }
+      if (historySession) {
+        refreshHistoryDialog(merged);
       }
       renderRecent(getMergedRecent());
       checkNotifications(merged);

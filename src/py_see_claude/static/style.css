@@ -746,4 +746,10 @@ body {
 }
 .group-tag-btn:hover { color: var(--accent-primary); }
 
+/* History dialog */
+.history-dialog { width: 600px; }
+.hd-loading {
+  text-align: center; color: var(--text-section); padding: 30px; font-size: 11px;
+}
+
 .footer { text-align: center; padding: 20px; font-size: 10px; color: var(--text-footer); }

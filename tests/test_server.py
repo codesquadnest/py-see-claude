@@ -289,6 +289,43 @@ class TestHTTPServer:
         data = json.loads(body)
         assert "live" in data
 
+    @patch(
+        "py_see_claude.server.get_session_history",
+        return_value=[
+            Message(role="user", text="hello", has_tool_use=False, has_tool_result=False),
+            Message(role="assistant", text="hi there", has_tool_use=False, has_tool_result=False),
+        ],
+    )
+    def test_api_history(self, mock_hist: object, server: ThreadedHTTPServer) -> None:
+        status, body = self._get(server, "/api/history?cwd=/Users/test/proj")
+        assert status == 200
+        data = json.loads(body)
+        assert data["ok"] is True
+        assert len(data["messages"]) == 2
+        assert data["messages"][0]["role"] == "user"
+        assert data["messages"][1]["text"] == "hi there"
+
+    @patch(
+        "py_see_claude.server.get_session_history",
+        return_value=[
+            Message(role="user", text="hello", has_tool_use=False, has_tool_result=False),
+        ],
+    )
+    def test_api_history_with_session_id(
+        self, mock_hist: object, server: ThreadedHTTPServer
+    ) -> None:
+        status, body = self._get(server, "/api/history?cwd=/Users/test/proj&session=abc123")
+        assert status == 200
+        data = json.loads(body)
+        assert data["ok"] is True
+        assert len(data["messages"]) == 1
+
+    def test_api_history_missing_cwd(self, server: ThreadedHTTPServer) -> None:
+        status, body = self._get(server, "/api/history")
+        assert status == 400
+        data = json.loads(body)
+        assert data["ok"] is False
+
     def test_cors_headers_on_sessions(self, server: ThreadedHTTPServer) -> None:
         """Test Feature 5: CORS headers are present on API responses."""
         host, port = server.server_address

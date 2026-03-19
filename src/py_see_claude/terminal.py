@@ -311,10 +311,97 @@ def _iterm2_run(shell_cmd: str) -> bool:
         return False
 
 
-# ---- Ghostty / generic implementations ----
-# Ghostty has no AppleScript dictionary. We use System Events to match
-# windows by title (Ghostty shows the cwd or running command in titles).
-# This approach also works as a fallback for any unknown terminal.
+# ---- Ghostty implementations ----
+# Ghostty has no AppleScript dictionary. We use System Events to find
+# the correct tab by matching the cwd in tab titles, then type via keystroke.
+
+
+def _ghostty_select_tab() -> bool:
+    """Select the Ghostty tab running Claude Code.
+
+    Ghostty exposes tabs as radio buttons inside a tab group. Claude Code
+    tabs show a title containing "Claude Code".
+    """
+    script = (
+        'tell application "System Events"\n'
+        '  tell process "ghostty"\n'
+        "    repeat with w in windows\n"
+        "      try\n"
+        "        repeat with tg in tab groups of w\n"
+        "          repeat with rb in radio buttons of tg\n"
+        '            if title of rb contains "Claude Code" then\n'
+        "              click rb\n"
+        "              delay 0.3\n"
+        '              return "found"\n'
+        "            end if\n"
+        "          end repeat\n"
+        "        end repeat\n"
+        "      end try\n"
+        "    end repeat\n"
+        "  end tell\n"
+        "end tell"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return "found" in result.stdout
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _ghostty_focus() -> bool:
+    """Focus Ghostty and select the correct tab."""
+    try:
+        subprocess.run(
+            ["osascript", "-e", 'tell application "ghostty" to activate'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+    _ghostty_select_tab()
+    return True
+
+
+def _ghostty_send(message: str) -> bool:
+    """Send a message to the correct Ghostty tab."""
+    _ghostty_focus()
+    time.sleep(0.3)
+
+    tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(message)
+
+        script = (
+            'tell application "System Events"\n'
+            '  tell process "ghostty"\n'
+            f'    set msgText to (read POSIX file "{tmp_path}")\n'
+            "    keystroke msgText\n"
+            "    keystroke return\n"
+            "  end tell\n"
+            "end tell"
+        )
+        subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True, timeout=10, check=False
+        )
+        return True
+    except (subprocess.SubprocessError, OSError):
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+
+
+# ---- Generic implementations (fallback for unknown terminals) ----
 
 
 def _generic_focus(process_name: str, cwd: str = "") -> bool:
@@ -452,7 +539,8 @@ def send_message(tty: str, message: str, cwd: str = "") -> bool:
         return _iterm2_send(tty, message)
     if terminal == "terminal":
         return _terminal_app_send(tty, message)
-    # Ghostty and any other terminal: use generic approach
+    if terminal == "ghostty":
+        return _ghostty_send(message)
     return _generic_send(terminal, message, cwd)
 
 
@@ -466,6 +554,8 @@ def focus_terminal(tty: str, cwd: str = "") -> bool:
         return _iterm2_focus(tty)
     if terminal == "terminal":
         return _terminal_app_focus(tty)
+    if terminal == "ghostty":
+        return _ghostty_focus()
     return _generic_focus(terminal, cwd)
 
 

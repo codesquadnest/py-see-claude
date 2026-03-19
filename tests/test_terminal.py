@@ -242,14 +242,14 @@ class TestPublicAPI:
         assert send_message("ttys001", "hello") is True
         mock_send.assert_called_once_with("ttys001", "hello")
 
-    @patch("py_see_claude.terminal._generic_send", return_value=True)
+    @patch("py_see_claude.terminal._ghostty_send", return_value=True)
     @patch("py_see_claude.terminal.detect_terminal_for_tty", return_value="ghostty")
     @patch("py_see_claude.terminal.is_macos", return_value=True)
     def test_send_dispatches_to_ghostty(
         self, _mac: object, _det: object, mock_send: MagicMock
     ) -> None:
         assert send_message("ttys001", "hello", cwd="/test/proj") is True
-        mock_send.assert_called_once_with("ghostty", "hello", "/test/proj")
+        mock_send.assert_called_once_with("hello")
 
     @patch("py_see_claude.terminal._iterm2_focus", return_value=True)
     @patch("py_see_claude.terminal.detect_terminal_for_tty", return_value="iterm2")
@@ -260,11 +260,11 @@ class TestPublicAPI:
         assert focus_terminal("ttys001") is True
         mock_focus.assert_called_once_with("ttys001")
 
-    @patch("py_see_claude.terminal._generic_focus", return_value=True)
+    @patch("py_see_claude.terminal._ghostty_focus", return_value=True)
     @patch("py_see_claude.terminal.detect_terminal_for_tty", return_value="ghostty")
     @patch("py_see_claude.terminal.is_macos", return_value=True)
     def test_focus_dispatches_to_ghostty(
         self, _mac: object, _det: object, mock_focus: MagicMock
     ) -> None:
         assert focus_terminal("ttys001", cwd="/test/proj") is True
-        mock_focus.assert_called_once_with("ghostty", "/test/proj")
+        mock_focus.assert_called_once_with()

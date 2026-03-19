@@ -19,6 +19,7 @@ from py_see_claude.sessions import (
     get_claude_sessions,
     get_project_roster,
     get_recent_sessions,
+    get_session_history,
 )
 from py_see_claude.terminal import focus_terminal, launch_session, new_session, send_message
 
@@ -201,6 +202,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._handle_focus(params)
         elif path == "/api/config":
             self._handle_config()
+        elif path == "/api/history":
+            self._handle_history(params)
         else:
             self._serve_static(path)
 
@@ -284,6 +287,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Return server configuration for multi-machine support."""
         remotes = _parse_remotes()
         self._send_json({"remotes": remotes})
+
+    def _handle_history(self, params: dict[str, list[str]]) -> None:
+        """Return conversation history for a specific session."""
+        session_id = params.get("session", [""])[0]
+        cwd = params.get("cwd", [""])[0]
+        if not cwd:
+            self._send_json({"ok": False, "error": "Missing cwd"}, status=400)
+            return
+        messages = get_session_history(cwd, session_id)
+        self._send_json({"ok": True, "messages": _serialize(messages)})
 
     def _handle_mkdir(self) -> None:
         try:

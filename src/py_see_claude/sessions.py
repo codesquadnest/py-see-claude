@@ -59,6 +59,14 @@ class ProjectRoster:
     first_message: str
 
 
+def _cwd_to_dir_key(cwd: str) -> str:
+    """Convert a working directory path to the Claude projects directory key.
+
+    Claude encodes both '/' and '.' as '-' in directory names.
+    """
+    return cwd.replace("/", "-").replace(".", "-")
+
+
 def format_time_ago(timestamp: float) -> str:
     """Format a unix timestamp as a human-readable 'X ago' string."""
     seconds = int(time.time() - timestamp)
@@ -112,7 +120,7 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
     if not cwd:
         return []
 
-    proj_key = cwd.replace("/", "-")
+    proj_key = _cwd_to_dir_key(cwd)
     proj_dir = PROJECTS_DIR / proj_key
     try:
         if not proj_dir.exists():
@@ -180,6 +188,105 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
             except (json.JSONDecodeError, KeyError, TypeError):
                 continue
         return msgs[-count:]
+    except OSError:
+        return []
+
+
+def _find_session_file(cwd: str, session_id: str = "") -> Path | None:
+    """Find a session JSONL file by session_id, or the most recent one for a cwd."""
+    proj_dir = PROJECTS_DIR / _cwd_to_dir_key(cwd)
+
+    if session_id:
+        if "/" in session_id or "\\" in session_id or ".." in session_id:
+            return None
+        file_path = proj_dir / f"{session_id}.jsonl"
+    else:
+        try:
+            files = [
+                (f, f.stat().st_mtime)
+                for f in proj_dir.iterdir()
+                if f.suffix == ".jsonl" and "subagent" not in f.name
+            ]
+        except OSError:
+            return None
+        if not files:
+            return None
+        files.sort(key=lambda x: x[1], reverse=True)
+        file_path = files[0][0]
+
+    try:
+        resolved = file_path.resolve()
+    except (ValueError, OSError):
+        return None
+
+    if not str(resolved).startswith(str(PROJECTS_DIR.resolve())) or not resolved.is_file():
+        return None
+    return file_path
+
+
+def get_session_history(cwd: str, session_id: str = "", count: int = 500) -> list[Message]:
+    """Read messages from a specific session JSONL file.
+
+    If session_id is empty, uses the most recent session file for the cwd.
+    """
+    if not cwd:
+        return []
+
+    file_path = _find_session_file(cwd, session_id)
+    if file_path is None:
+        return []
+
+    try:
+        msgs: list[Message] = []
+        with open(file_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                if len(msgs) >= count:
+                    break
+                try:
+                    d = json.loads(line)
+                    role = d.get("message", {}).get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    content = d["message"]["content"]
+                    text = ""
+                    has_tool_use = False
+                    has_tool_result = False
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        for c in content:
+                            if c.get("type") == "text" and c.get("text", "").strip() and not text:
+                                text = c["text"].strip()
+                            if c.get("type") == "tool_use":
+                                has_tool_use = True
+                            if c.get("type") == "tool_result":
+                                has_tool_result = True
+
+                    if text:
+                        msgs.append(
+                            Message(
+                                role=role,
+                                text=text[:1000],
+                                has_tool_use=has_tool_use,
+                                has_tool_result=has_tool_result,
+                            )
+                        )
+                    elif has_tool_use or has_tool_result:
+                        display = "(using tools...)" if has_tool_use else "(tool result)"
+                        msgs.append(
+                            Message(
+                                role=role,
+                                text=display,
+                                has_tool_use=has_tool_use,
+                                has_tool_result=has_tool_result,
+                            )
+                        )
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+
+        return msgs
     except OSError:
         return []
 
