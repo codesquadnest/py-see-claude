@@ -46,6 +46,7 @@ class TestSerialize:
             "text": "hello",
             "hasToolUse": False,
             "hasToolResult": False,
+            "timestamp": "",
         }
 
     def test_list(self) -> None:

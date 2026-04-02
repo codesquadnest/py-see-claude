@@ -139,11 +139,18 @@ class TestITerm2:
 
     @patch("py_see_claude.terminal.subprocess.run")
     def test_send_uses_write_text(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock()
-        _iterm2_send("ttys001", "hello world")
+        mock_run.return_value = MagicMock(stdout="sent")
+        result = _iterm2_send("ttys001", "hello world")
         script = mock_run.call_args[0][0][2]
         assert "write text" in script
         assert "ttys001" in script
+        assert result is True
+
+    @patch("py_see_claude.terminal.subprocess.run")
+    def test_send_returns_false_when_session_not_found(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(stdout="")
+        result = _iterm2_send("ttys999", "hello")
+        assert result is False
 
     @patch("py_see_claude.terminal.subprocess.run")
     def test_run_creates_tab(self, mock_run: MagicMock) -> None:
@@ -179,9 +186,10 @@ class TestTerminalApp:
     def test_focus_handles_error(self, _mock: object) -> None:
         assert _terminal_app_focus("ttys001") is False
 
-    @patch("py_see_claude.terminal.subprocess.run", side_effect=OSError)
+    @patch("py_see_claude.terminal.subprocess.run", side_effect=OSError("test error"))
     def test_send_handles_error(self, _mock: object) -> None:
-        assert _terminal_app_send("ttys001", "hello") is False
+        result = _terminal_app_send("ttys001", "hello")
+        assert result is not True
 
 
 class TestGenericTerminal:
@@ -219,7 +227,9 @@ class TestGenericTerminal:
 class TestPublicAPI:
     @patch("py_see_claude.terminal.is_macos", return_value=False)
     def test_send_non_macos(self, _mock: object) -> None:
-        assert send_message("ttys001", "hello") is False
+        result = send_message("ttys001", "hello")
+        assert result is not True
+        assert isinstance(result, str)
 
     @patch("py_see_claude.terminal.is_macos", return_value=False)
     def test_focus_non_macos(self, _mock: object) -> None:
@@ -249,7 +259,7 @@ class TestPublicAPI:
         self, _mac: object, _det: object, mock_send: MagicMock
     ) -> None:
         assert send_message("ttys001", "hello", cwd="/test/proj") is True
-        mock_send.assert_called_once_with("hello")
+        mock_send.assert_called_once_with("hello", cwd="/test/proj", focus=True)
 
     @patch("py_see_claude.terminal._iterm2_focus", return_value=True)
     @patch("py_see_claude.terminal.detect_terminal_for_tty", return_value="iterm2")
@@ -267,4 +277,4 @@ class TestPublicAPI:
         self, _mac: object, _det: object, mock_focus: MagicMock
     ) -> None:
         assert focus_terminal("ttys001", cwd="/test/proj") is True
-        mock_focus.assert_called_once_with()
+        mock_focus.assert_called_once_with(cwd="/test/proj")

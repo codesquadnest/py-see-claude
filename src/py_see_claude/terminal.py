@@ -48,7 +48,11 @@ def _get_comm(pid: str) -> str:
             timeout=3,
             check=False,
         )
-        return result.stdout.strip()
+        comm = result.stdout.strip()
+        # ps -o comm= may return a full path on macOS (e.g.
+        # /System/Applications/.../Terminal); extract the basename so
+        # callers can match on the process name alone.
+        return os.path.basename(comm) if comm else ""
     except (subprocess.SubprocessError, OSError):
         return ""
 
@@ -71,17 +75,45 @@ def _normalize_tty(tty: str) -> str:
     return tty
 
 
-def detect_terminal_for_tty(tty: str) -> str:
+def _walk_up_for_terminal(start_pid: str) -> str:
+    """Walk up the process tree from a PID to find the terminal emulator.
+
+    Returns 'ghostty', 'iterm2', 'terminal', or empty string if not found.
+    """
+    current = start_pid
+    for _ in range(10):
+        if not current or current in ("0", "1"):
+            break
+        comm = _get_comm(current).lower()
+        if "ghostty" in comm:
+            return "ghostty"
+        if "iterm" in comm:
+            return "iterm2"
+        if comm == "terminal":
+            return "terminal"
+        current = _get_ppid(current)
+    return ""
+
+
+def detect_terminal_for_tty(tty: str, pid: str = "") -> str:
     """Determine which terminal emulator owns a TTY by walking the process tree.
 
+    If *pid* is provided, walks up directly from that process (most reliable).
+    Otherwise falls back to finding processes on the TTY via ``ps -t``.
     Returns 'ghostty', 'iterm2', 'terminal', or the raw process name.
     """
     if not is_macos():
         return "unknown"
 
+    # Strategy 1: walk up from the known PID (most reliable)
+    if pid:
+        found = _walk_up_for_terminal(_get_ppid(pid))
+        if found:
+            return found
+
+    # Strategy 2: find processes on the TTY and walk up from their parents
     norm = _normalize_tty(tty)
     try:
-        # Find processes on this TTY
         result = subprocess.run(
             ["ps", "-t", norm, "-o", "ppid="],
             capture_output=True,
@@ -89,25 +121,12 @@ def detect_terminal_for_tty(tty: str) -> str:
             timeout=5,
             check=False,
         )
-        # Collect unique PPIDs of processes on this TTY
         ppids = {p.strip() for p in result.stdout.strip().split() if p.strip()}
 
         for ppid in ppids:
-            # Walk up from each PPID to find the terminal emulator
-            current = ppid
-            for _ in range(5):
-                if not current or current in ("0", "1"):
-                    break
-                comm = _get_comm(current).lower()
-                # Check against known terminals
-                if "ghostty" in comm:
-                    return "ghostty"
-                if "iterm" in comm:
-                    return "iterm2"
-                # Terminal.app spawns 'login', so its parent is Terminal
-                if comm == "terminal":
-                    return "terminal"
-                current = _get_ppid(current)
+            found = _walk_up_for_terminal(ppid)
+            if found:
+                return found
     except (subprocess.SubprocessError, OSError):
         pass
 
@@ -163,44 +182,57 @@ def _terminal_app_focus(tty: str) -> bool:
         return False
 
 
-def _terminal_app_send(tty: str, message: str) -> bool:
-    """Send a message to a Terminal.app tab by focusing and typing."""
+def _terminal_app_send(tty: str, message: str, focus: bool = True) -> bool | str:
+    """Send a message to a Terminal.app tab via ``do script``.
+
+    Uses Terminal.app's native ``do script`` which writes directly to the
+    tab's PTY — no System Events / Accessibility permission needed.
+    Returns True on success, or an error string on failure.
+    """
     norm = _normalize_tty(tty)
     tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(message)
 
+        focus_lines = ""
+        if focus:
+            focus_lines = (
+                "        set selected tab of win to theTab\n"
+                "        set index of win to 1\n"
+                "        activate\n"
+            )
+
         script = (
+            f'set msgText to (read POSIX file "{tmp_path}")\n'
             'tell application "Terminal"\n'
             "  repeat with w from 1 to count of windows\n"
             "    set win to window w\n"
             "    repeat with t from 1 to count of tabs of win\n"
             "      set theTab to tab t of win\n"
             f'      if tty of theTab contains "{norm}" then\n'
-            "        set selected tab of win to theTab\n"
-            "        set index of win to 1\n"
-            "        activate\n"
-            "        delay 0.2\n"
-            '        tell application "System Events"\n'
-            '          tell process "Terminal"\n'
-            f'            set msgText to (read POSIX file "{tmp_path}")\n'
-            "            keystroke msgText\n"
-            "            keystroke return\n"
-            "          end tell\n"
-            "        end tell\n"
+            + focus_lines
+            + "        do script msgText in theTab\n"
             '        return "sent"\n'
             "      end if\n"
             "    end repeat\n"
             "  end repeat\n"
             "end tell"
         )
-        subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True, timeout=10, check=False
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
-        return True
-    except (subprocess.SubprocessError, OSError):
-        return False
+        if "sent" in result.stdout:
+            return True
+        # Return osascript error for diagnosis
+        err = result.stderr.strip()
+        return err if err else False
+    except (subprocess.SubprocessError, OSError) as exc:
+        return str(exc)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
@@ -264,28 +296,39 @@ def _iterm2_focus(tty: str) -> bool:
 def _iterm2_send(tty: str, message: str) -> bool:
     """Send a message to an iTerm2 session using its native write text."""
     norm = _normalize_tty(tty)
-    escaped = message.replace("\\", "\\\\").replace('"', '\\"')
-    script = (
-        'tell application "iTerm2"\n'
-        "  repeat with w in windows\n"
-        "    repeat with t in tabs of w\n"
-        "      repeat with s in sessions of t\n"
-        f'        if tty of s contains "{norm}" then\n'
-        f'          tell s to write text "{escaped}"\n'
-        '          return "sent"\n'
-        "        end if\n"
-        "      end repeat\n"
-        "    end repeat\n"
-        "  end repeat\n"
-        "end tell"
-    )
+    tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
     try:
-        subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True, timeout=5, check=False
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(message)
+
+        script = (
+            f'set msgText to (read POSIX file "{tmp_path}")\n'
+            'tell application "iTerm2"\n'
+            "  repeat with w in windows\n"
+            "    repeat with t in tabs of w\n"
+            "      repeat with s in sessions of t\n"
+            f'        if tty of s contains "{norm}" then\n'
+            "          tell s to write text msgText\n"
+            '          return "sent"\n'
+            "        end if\n"
+            "      end repeat\n"
+            "    end repeat\n"
+            "  end repeat\n"
+            "end tell"
         )
-        return True
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return "sent" in result.stdout
     except (subprocess.SubprocessError, OSError):
         return False
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
 
 
 def _iterm2_run(shell_cmd: str) -> bool:
@@ -316,29 +359,45 @@ def _iterm2_run(shell_cmd: str) -> bool:
 # the correct tab by matching the cwd in tab titles, then type via keystroke.
 
 
-def _ghostty_select_tab() -> bool:
-    """Select the Ghostty tab running Claude Code.
+def _ghostty_select_tab(cwd: str = "") -> bool:
+    """Select the Ghostty tab for a specific Claude Code session.
 
-    Ghostty exposes tabs as radio buttons inside a tab group. Claude Code
-    tabs show a title containing "Claude Code".
+    Ghostty exposes tabs as radio buttons inside a tab group. Tries matching
+    by CWD basename first (most specific), then "Claude Code", then "claude".
     """
+    # Build match candidates, most specific first
+    candidates: list[str] = []
+    if cwd:
+        basename = os.path.basename(cwd.rstrip("/"))
+        if basename:
+            candidates.append(basename)
+    candidates.append("Claude Code")
+    candidates.append("claude")
+
+    # Build a single script that tries each match string in order
+    blocks: list[str] = []
+    for match_str in candidates:
+        blocks.append(
+            "    repeat with w in windows\n"
+            "      try\n"
+            "        repeat with tg in tab groups of w\n"
+            "          repeat with rb in radio buttons of tg\n"
+            f'            if title of rb contains "{match_str}" then\n'
+            "              click rb\n"
+            "              delay 0.3\n"
+            '              return "found"\n'
+            "            end if\n"
+            "          end repeat\n"
+            "        end repeat\n"
+            "      end try\n"
+            "    end repeat\n"
+        )
+
     script = (
         'tell application "System Events"\n'
         '  tell process "ghostty"\n'
-        "    repeat with w in windows\n"
-        "      try\n"
-        "        repeat with tg in tab groups of w\n"
-        "          repeat with rb in radio buttons of tg\n"
-        '            if title of rb contains "Claude Code" then\n'
-        "              click rb\n"
-        "              delay 0.3\n"
-        '              return "found"\n'
-        "            end if\n"
-        "          end repeat\n"
-        "        end repeat\n"
-        "      end try\n"
-        "    end repeat\n"
-        "  end tell\n"
+        + "".join(blocks)
+        + "  end tell\n"
         "end tell"
     )
     try:
@@ -354,7 +413,7 @@ def _ghostty_select_tab() -> bool:
         return False
 
 
-def _ghostty_focus() -> bool:
+def _ghostty_focus(cwd: str = "") -> bool:
     """Focus Ghostty and select the correct tab."""
     try:
         subprocess.run(
@@ -367,15 +426,50 @@ def _ghostty_focus() -> bool:
     except (subprocess.SubprocessError, OSError):
         return False
 
-    _ghostty_select_tab()
+    _ghostty_select_tab(cwd)
     return True
 
 
-def _ghostty_send(message: str) -> bool:
-    """Send a message to the correct Ghostty tab."""
-    _ghostty_focus()
-    time.sleep(0.3)
+def _ghostty_send(message: str, cwd: str = "", focus: bool = True) -> bool:
+    """Send a message to the correct Ghostty tab.
 
+    When *focus* is False, briefly activates Ghostty to type then immediately
+    re-focuses the previously active application.
+    """
+    if focus:
+        _ghostty_focus(cwd)
+        time.sleep(0.3)
+
+        tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(message)
+
+            script = (
+                'tell application "System Events"\n'
+                '  tell process "ghostty"\n'
+                f'    set msgText to (read POSIX file "{tmp_path}")\n'
+                "    keystroke msgText\n"
+                "    keystroke return\n"
+                "  end tell\n"
+                "end tell"
+            )
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            return True
+        except (subprocess.SubprocessError, OSError):
+            return False
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+
+    # No-focus path: remember the active app, activate Ghostty to type,
+    # then immediately switch back.
     tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -383,15 +477,27 @@ def _ghostty_send(message: str) -> bool:
 
         script = (
             'tell application "System Events"\n'
+            "  set prevApp to name of first application process "
+            "whose frontmost is true\n"
+            "end tell\n"
+            'tell application "ghostty" to activate\n'
+            "delay 0.3\n"
+            'tell application "System Events"\n'
             '  tell process "ghostty"\n'
             f'    set msgText to (read POSIX file "{tmp_path}")\n'
             "    keystroke msgText\n"
             "    keystroke return\n"
             "  end tell\n"
-            "end tell"
+            "end tell\n"
+            "delay 0.1\n"
+            'tell application prevApp to activate\n'
         )
         subprocess.run(
-            ["osascript", "-e", script], capture_output=True, text=True, timeout=10, check=False
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
         return True
     except (subprocess.SubprocessError, OSError):
@@ -455,11 +561,21 @@ def _generic_focus(process_name: str, cwd: str = "") -> bool:
     return True
 
 
-def _generic_send(process_name: str, message: str, cwd: str = "") -> bool:
-    """Send a message to any terminal by focusing it and typing via System Events."""
-    # First focus the right window
-    _generic_focus(process_name, cwd)
-    time.sleep(0.3)
+def _generic_send(process_name: str, message: str, cwd: str = "", focus: bool = True) -> bool:
+    """Send a message to any terminal by typing via System Events.
+
+    When *focus* is False, briefly activates the terminal to type then
+    immediately re-focuses the previously active application.
+    """
+    app_name = process_name
+    for key, (_, display) in _KNOWN_TERMINALS.items():
+        if key == process_name:
+            app_name = display
+            break
+
+    if focus:
+        _generic_focus(process_name, cwd)
+        time.sleep(0.3)
 
     process_id = process_name.lower()
     tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
@@ -467,15 +583,34 @@ def _generic_send(process_name: str, message: str, cwd: str = "") -> bool:
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(message)
 
-        script = (
-            'tell application "System Events"\n'
-            f'  tell process "{process_id}"\n'
-            f'    set msgText to (read POSIX file "{tmp_path}")\n'
-            "    keystroke msgText\n"
-            "    keystroke return\n"
-            "  end tell\n"
-            "end tell"
-        )
+        if focus:
+            script = (
+                'tell application "System Events"\n'
+                f'  tell process "{process_id}"\n'
+                f'    set msgText to (read POSIX file "{tmp_path}")\n'
+                "    keystroke msgText\n"
+                "    keystroke return\n"
+                "  end tell\n"
+                "end tell"
+            )
+        else:
+            script = (
+                'tell application "System Events"\n'
+                "  set prevApp to name of first application process "
+                "whose frontmost is true\n"
+                "end tell\n"
+                f'tell application "{app_name}" to activate\n'
+                "delay 0.3\n"
+                'tell application "System Events"\n'
+                f'  tell process "{process_id}"\n'
+                f'    set msgText to (read POSIX file "{tmp_path}")\n'
+                "    keystroke msgText\n"
+                "    keystroke return\n"
+                "  end tell\n"
+                "end tell\n"
+                "delay 0.1\n"
+                'tell application prevApp to activate\n'
+            )
         subprocess.run(
             ["osascript", "-e", script], capture_output=True, text=True, timeout=10, check=False
         )
@@ -529,33 +664,46 @@ def _generic_run(process_name: str, shell_cmd: str) -> bool:
 # ---- Public API ----
 
 
-def send_message(tty: str, message: str, cwd: str = "") -> bool:
-    """Send a message to a terminal session identified by TTY."""
+def send_message(
+    tty: str, message: str, cwd: str = "", focus: bool = True, pid: str = ""
+) -> bool | str:
+    """Send a message to a terminal session identified by TTY.
+
+    When *focus* is False the terminal window stays in the background.
+    Returns True on success, or an error string on failure.
+    """
     if not is_macos():
-        return False
+        return "Not supported on this platform"
 
-    terminal = detect_terminal_for_tty(tty)
+    terminal = detect_terminal_for_tty(tty, pid=pid)
     if terminal == "iterm2":
-        return _iterm2_send(tty, message)
+        ok = _iterm2_send(tty, message)
+        return True if ok else f"iTerm2: session with tty {tty} not found"
     if terminal == "terminal":
-        return _terminal_app_send(tty, message)
+        result = _terminal_app_send(tty, message, focus=focus)
+        if result is True:
+            return True
+        detail = result if isinstance(result, str) else ""
+        return f"Terminal.app: tab with tty {tty} not found" + (f" ({detail})" if detail else "")
     if terminal == "ghostty":
-        return _ghostty_send(message)
-    return _generic_send(terminal, message, cwd)
+        ok = _ghostty_send(message, cwd=cwd, focus=focus)
+        return True if ok else "Ghostty: failed to send"
+    ok = _generic_send(terminal, message, cwd, focus=focus)
+    return True if ok else f"Terminal '{terminal}': failed to send"
 
 
-def focus_terminal(tty: str, cwd: str = "") -> bool:
+def focus_terminal(tty: str, cwd: str = "", pid: str = "") -> bool:
     """Focus the terminal window containing a session."""
     if not is_macos():
         return False
 
-    terminal = detect_terminal_for_tty(tty)
+    terminal = detect_terminal_for_tty(tty, pid=pid)
     if terminal == "iterm2":
         return _iterm2_focus(tty)
     if terminal == "terminal":
         return _terminal_app_focus(tty)
     if terminal == "ghostty":
-        return _ghostty_focus()
+        return _ghostty_focus(cwd=cwd)
     return _generic_focus(terminal, cwd)
 
 

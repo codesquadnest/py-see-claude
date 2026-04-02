@@ -8,6 +8,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from py_see_claude.process import find_claude_pids, get_process_cwd, get_process_info
@@ -22,6 +23,7 @@ class Message:
     text: str
     has_tool_use: bool = False
     has_tool_result: bool = False
+    timestamp: str = ""
 
 
 @dataclass
@@ -152,6 +154,7 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
                 if role not in ("user", "assistant"):
                     continue
                 content = d["message"]["content"]
+                ts = d.get("timestamp", "")
                 text = ""
                 has_tool_use = False
                 has_tool_result = False
@@ -173,6 +176,7 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
                             text=text[:300],
                             has_tool_use=has_tool_use,
                             has_tool_result=has_tool_result,
+                            timestamp=ts,
                         )
                     )
                 elif has_tool_use or has_tool_result:
@@ -183,6 +187,7 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
                             text=display,
                             has_tool_use=has_tool_use,
                             has_tool_result=has_tool_result,
+                            timestamp=ts,
                         )
                     )
             except (json.JSONDecodeError, KeyError, TypeError):
@@ -250,6 +255,7 @@ def get_session_history(cwd: str, session_id: str = "", count: int = 500) -> lis
                     if role not in ("user", "assistant"):
                         continue
                     content = d["message"]["content"]
+                    ts = d.get("timestamp", "")
                     text = ""
                     has_tool_use = False
                     has_tool_result = False
@@ -271,6 +277,7 @@ def get_session_history(cwd: str, session_id: str = "", count: int = 500) -> lis
                                 text=text[:1000],
                                 has_tool_use=has_tool_use,
                                 has_tool_result=has_tool_result,
+                                timestamp=ts,
                             )
                         )
                     elif has_tool_use or has_tool_result:
@@ -281,6 +288,7 @@ def get_session_history(cwd: str, session_id: str = "", count: int = 500) -> lis
                                 text=display,
                                 has_tool_use=has_tool_use,
                                 has_tool_result=has_tool_result,
+                                timestamp=ts,
                             )
                         )
                 except (json.JSONDecodeError, KeyError, TypeError):
@@ -313,6 +321,18 @@ def get_claude_sessions() -> list[LiveSession]:
             last = messages[-1]
             if last.role == "user":
                 status = "working"
+                # If the last user message is old and CPU is low, Claude
+                # is no longer processing (e.g. after /clear or /compact).
+                if last.timestamp and cpu_num < 5:
+                    try:
+                        ts = datetime.fromisoformat(
+                            last.timestamp.replace("Z", "+00:00")
+                        )
+                        age = time.time() - ts.timestamp()
+                        if age > 30:
+                            status = "idle"
+                    except (ValueError, OSError):
+                        pass
             elif last.has_tool_use:
                 status = "thinking"
 

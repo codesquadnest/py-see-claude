@@ -279,8 +279,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _handle_focus(self, params: dict[str, list[str]]) -> None:
         tty = params.get("tty", [""])[0]
         cwd = params.get("cwd", [""])[0]
+        pid = params.get("pid", [""])[0]
         if tty:
-            focus_terminal(tty, cwd=cwd)
+            focus_terminal(tty, cwd=cwd, pid=pid)
         self._send_json({"ok": True})
 
     def _handle_config(self) -> None:
@@ -331,11 +332,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _handle_send(self) -> None:
         try:
             body = json.loads(self._read_body())
-            ok = send_message(tty=body["tty"], message=body["message"], cwd=body.get("cwd", ""))
-            if ok:
+            result = send_message(
+                tty=body["tty"],
+                message=body["message"],
+                cwd=body.get("cwd", ""),
+                focus=False,
+                pid=body.get("pid", ""),
+            )
+            if result is True:
                 self._send_json({"ok": True})
             else:
-                self._send_json({"ok": False, "error": "Send failed or not supported"}, status=500)
+                error = result if isinstance(result, str) else "Send failed"
+                self._send_json({"ok": False, "error": error}, status=500)
         except (json.JSONDecodeError, KeyError) as e:
             self._send_json({"ok": False, "error": str(e)}, status=500)
 

@@ -534,7 +534,7 @@ async function sendMsg(tty, pid, cwd, event) {
     const res = await fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tty, message: msg, cwd: cwd || '' }),
+      body: JSON.stringify({ tty, message: msg, cwd: cwd || '', pid: pid || '' }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -777,7 +777,7 @@ async function sendPixelMsg(event) {
     const res = await fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tty: pixelDialogTty, message: msg, cwd: pixelDialogCwd || '' }),
+      body: JSON.stringify({ tty: pixelDialogTty, message: msg, cwd: pixelDialogCwd || '', pid: pixelDialogPid || '' }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -851,11 +851,20 @@ setInterval(updateOffice, 30000);
 
 // --- Desktop notifications + Sound alerts ---
 let prevStatuses = {};
+let lastNotifyTime = {};
+const NOTIFY_COOLDOWN_MS = 30000; // 30s cooldown per session
 
 function checkNotifications(sessions) {
+  const now = Date.now();
   sessions.forEach(s => {
     const prev = prevStatuses[s.pid];
     if (prev && (prev === 'working' || prev === 'thinking') && s.status === 'idle') {
+      // Skip if we notified for this PID recently (prevents CPU-flicker spam)
+      if (lastNotifyTime[s.pid] && (now - lastNotifyTime[s.pid]) < NOTIFY_COOLDOWN_MS) {
+        prevStatuses[s.pid] = s.status;
+        return;
+      }
+      lastNotifyTime[s.pid] = now;
       // Desktop notification
       if (Notification.permission === 'granted') {
         new Notification('Claude finished', {
@@ -1509,7 +1518,7 @@ async function sendHistoryMsg(event) {
     const res = await fetch('/api/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tty: historySession.tty, message: msg, cwd: historySession.cwd || '' }),
+      body: JSON.stringify({ tty: historySession.tty, message: msg, cwd: historySession.cwd || '', pid: historySession.pid || '' }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -1543,6 +1552,28 @@ function connectSSE() {
       if (!inputFocused && !pixelDialogOpen) {
         if (currentView === 'terminal') renderLive(merged);
         else renderPixel(merged);
+      }
+      // When the input is focused, still update the message history and status
+      // so responses appear after sending a command.
+      if (inputFocused) {
+        const session = merged.find(s => s.pid === expandedPid);
+        if (session) {
+          const hist = document.getElementById('history-' + expandedPid);
+          if (hist) {
+            hist.innerHTML = (session.messages || []).map(m => `
+              <div class="msg-bubble ${m.role}">
+                <span class="msg-role">${m.role === 'assistant' ? 'Claude' : 'You'}</span>
+                <div class="msg-text">${escapeHtml(m.text)}</div>
+              </div>
+            `).join('');
+            hist.scrollTop = hist.scrollHeight;
+          }
+          const statusEl = hist?.closest('.station')?.querySelector('.screen-status');
+          if (statusEl) {
+            statusEl.textContent = getStatusLabel(session.status);
+            statusEl.style.color = getStatusColor(session.status);
+          }
+        }
       }
       if (pixelDialogOpen) {
         const session = merged.find(s => s.pid === pixelDialogPid);
