@@ -294,7 +294,14 @@ def _iterm2_focus(tty: str) -> bool:
 
 
 def _iterm2_send(tty: str, message: str) -> bool:
-    """Send a message to an iTerm2 session using its native write text."""
+    """Send a message to an iTerm2 session using its native write text.
+
+    The message and the trailing Return are written as two separate PTY
+    writes with a delay in between. Claude Code's TUI batches rapid input
+    as a paste and a \\r arriving inside that batch is treated as a
+    newline in the prompt rather than a submit — the delay lets paste
+    detection finalize so the Return registers as a fresh key press.
+    """
     norm = _normalize_tty(tty)
     tmp_path = f"/tmp/see-claude-msg-{int(time.time() * 1000)}.txt"
     try:
@@ -308,7 +315,9 @@ def _iterm2_send(tty: str, message: str) -> bool:
             "    repeat with t in tabs of w\n"
             "      repeat with s in sessions of t\n"
             f'        if tty of s contains "{norm}" then\n'
-            "          tell s to write text msgText\n"
+            "          tell s to write text msgText newline NO\n"
+            "          delay 0.5\n"
+            '          tell s to write text "" newline YES\n'
             '          return "sent"\n'
             "        end if\n"
             "      end repeat\n"
