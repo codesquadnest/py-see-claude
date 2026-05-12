@@ -850,36 +850,51 @@ updateOffice();
 setInterval(updateOffice, 30000);
 
 // --- Desktop notifications + Sound alerts ---
-let prevStatuses = {};
+// Only fire when a session has stayed idle for IDLE_CONFIRM_TICKS consecutive
+// polls (~6s at 2s cadence) AND we've seen working/thinking since the last
+// notification. This avoids mid-turn CPU dips that briefly flip status to idle.
+let idleStreak = {};
+let hadActivity = {};
 let lastNotifyTime = {};
-const NOTIFY_COOLDOWN_MS = 30000; // 30s cooldown per session
+const IDLE_CONFIRM_TICKS = 3;
+const NOTIFY_COOLDOWN_MS = 30000;
 
 function checkNotifications(sessions) {
   const now = Date.now();
+  const seen = new Set();
   sessions.forEach(s => {
-    const prev = prevStatuses[s.pid];
-    if (prev && (prev === 'working' || prev === 'thinking') && s.status === 'idle') {
-      // Skip if we notified for this PID recently (prevents CPU-flicker spam)
-      if (lastNotifyTime[s.pid] && (now - lastNotifyTime[s.pid]) < NOTIFY_COOLDOWN_MS) {
-        prevStatuses[s.pid] = s.status;
-        return;
-      }
-      lastNotifyTime[s.pid] = now;
-      // Desktop notification
-      if (Notification.permission === 'granted') {
-        new Notification('Claude finished', {
-          body: s.projectName + ' is now idle',
-          icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDDA5\uFE0F</text></svg>',
-          silent: false,
-        });
-      }
-      // Feature 4: Sound alert
-      if (soundEnabled) {
-        playChime();
-      }
+    seen.add(s.pid);
+    if (s.status === 'working' || s.status === 'thinking') {
+      hadActivity[s.pid] = true;
+      idleStreak[s.pid] = 0;
+      return;
     }
-    prevStatuses[s.pid] = s.status;
+    if (s.status !== 'idle') return;
+
+    idleStreak[s.pid] = (idleStreak[s.pid] || 0) + 1;
+    if (idleStreak[s.pid] !== IDLE_CONFIRM_TICKS) return;
+    if (!hadActivity[s.pid]) return;
+    if (lastNotifyTime[s.pid] && (now - lastNotifyTime[s.pid]) < NOTIFY_COOLDOWN_MS) return;
+
+    lastNotifyTime[s.pid] = now;
+    hadActivity[s.pid] = false;
+    if (Notification.permission === 'granted') {
+      new Notification('Claude finished', {
+        body: s.projectName + ' is now idle',
+        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">\uD83D\uDDA5\uFE0F</text></svg>',
+        silent: false,
+      });
+    }
+    if (soundEnabled) playChime();
   });
+  // Drop state for sessions that have gone away
+  for (const pid of Object.keys(idleStreak)) {
+    if (!seen.has(pid)) {
+      delete idleStreak[pid];
+      delete hadActivity[pid];
+      delete lastNotifyTime[pid];
+    }
+  }
 }
 
 if ('Notification' in window && Notification.permission === 'default') {

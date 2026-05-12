@@ -144,6 +144,12 @@ class TestCwdToDirKey:
     def test_multiple_dots(self) -> None:
         assert _cwd_to_dir_key("/home/a.b.c/proj") == "-home-a-b-c-proj"
 
+    def test_path_with_underscores(self) -> None:
+        assert (
+            _cwd_to_dir_key("/Users/me/Workspace/projects/tests_azure_performance")
+            == "-Users-me-Workspace-projects-tests-azure-performance"
+        )
+
 
 class TestGetSessionHistory:
     def test_reads_full_history(self, sample_session_file: Path) -> None:

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -64,9 +65,9 @@ class ProjectRoster:
 def _cwd_to_dir_key(cwd: str) -> str:
     """Convert a working directory path to the Claude projects directory key.
 
-    Claude encodes both '/' and '.' as '-' in directory names.
+    Claude encodes '/', '.' and '_' as '-' in directory names.
     """
-    return cwd.replace("/", "-").replace(".", "-")
+    return cwd.replace("/", "-").replace(".", "-").replace("_", "-")
 
 
 def format_time_ago(timestamp: float) -> str:
@@ -137,62 +138,60 @@ def get_session_messages(cwd: str, count: int = 20) -> list[Message]:
             return []
 
         file_path = files[0][0]
-        stat = file_path.stat()
-        read_size = min(stat.st_size, 65536)
 
-        with open(file_path, "rb") as fh:
-            fh.seek(max(0, stat.st_size - read_size))
-            data = fh.read(read_size)
-
-        msgs: list[Message] = []
-        for line in data.decode("utf-8", errors="replace").split("\n"):
-            if not line.strip():
-                continue
-            try:
-                d = json.loads(line)
-                role = d.get("message", {}).get("role")
-                if role not in ("user", "assistant"):
+        # Stream the whole file but keep only the last `count` valid messages.
+        # A tail-only read can land mid-line on a giant assistant entry and
+        # return zero parseable messages.
+        recent: deque[Message] = deque(maxlen=count)
+        with open(file_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
                     continue
-                content = d["message"]["content"]
-                ts = d.get("timestamp", "")
-                text = ""
-                has_tool_use = False
-                has_tool_result = False
-                if isinstance(content, str):
-                    text = content
-                elif isinstance(content, list):
-                    for c in content:
-                        if c.get("type") == "text" and c.get("text", "").strip() and not text:
-                            text = c["text"].strip()
-                        if c.get("type") == "tool_use":
-                            has_tool_use = True
-                        if c.get("type") == "tool_result":
-                            has_tool_result = True
+                try:
+                    d = json.loads(line)
+                    role = d.get("message", {}).get("role")
+                    if role not in ("user", "assistant"):
+                        continue
+                    content = d["message"]["content"]
+                    ts = d.get("timestamp", "")
+                    text = ""
+                    has_tool_use = False
+                    has_tool_result = False
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        for c in content:
+                            if c.get("type") == "text" and c.get("text", "").strip() and not text:
+                                text = c["text"].strip()
+                            if c.get("type") == "tool_use":
+                                has_tool_use = True
+                            if c.get("type") == "tool_result":
+                                has_tool_result = True
 
-                if text:
-                    msgs.append(
-                        Message(
-                            role=role,
-                            text=text[:300],
-                            has_tool_use=has_tool_use,
-                            has_tool_result=has_tool_result,
-                            timestamp=ts,
+                    if text:
+                        recent.append(
+                            Message(
+                                role=role,
+                                text=text[:300],
+                                has_tool_use=has_tool_use,
+                                has_tool_result=has_tool_result,
+                                timestamp=ts,
+                            )
                         )
-                    )
-                elif has_tool_use or has_tool_result:
-                    display = "(using tools...)" if has_tool_use else "(tool result)"
-                    msgs.append(
-                        Message(
-                            role=role,
-                            text=display,
-                            has_tool_use=has_tool_use,
-                            has_tool_result=has_tool_result,
-                            timestamp=ts,
+                    elif has_tool_use or has_tool_result:
+                        display = "(using tools...)" if has_tool_use else "(tool result)"
+                        recent.append(
+                            Message(
+                                role=role,
+                                text=display,
+                                has_tool_use=has_tool_use,
+                                has_tool_result=has_tool_result,
+                                timestamp=ts,
+                            )
                         )
-                    )
-            except (json.JSONDecodeError, KeyError, TypeError):
-                continue
-        return msgs[-count:]
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+        return list(recent)
     except OSError:
         return []
 
