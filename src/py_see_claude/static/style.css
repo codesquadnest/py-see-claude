@@ -372,17 +372,25 @@ body {
   font-size: 9px; margin-left: auto; text-transform: uppercase; letter-spacing: 1px;
 }
 
-.project-name { font-size: 14px; font-weight: 500; color: var(--text-project-name); margin-bottom: 2px; }
-.project-path { font-size: 9px; color: var(--text-project-path); word-break: break-all; margin-bottom: 4px; }
+.project-name {
+  font-size: 14px; font-weight: 500; color: var(--text-project-name); margin-bottom: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-path {
+  font-size: 9px; color: var(--text-project-path); margin-bottom: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl;
+}
 .first-prompt {
   font-size: 9px; color: var(--text-first-prompt); font-style: italic; margin-bottom: 6px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  height: 14px;
 }
 
-/* Last message preview (collapsed) */
+/* Last message preview (collapsed) — always reserve 3 lines so cards stay
+   the same height whether or not there's a message yet. */
 .last-msg-preview {
   font-size: 11px; color: var(--text-msg-preview); margin: 6px 0; line-height: 1.5;
-  max-height: 52px; overflow: hidden; display: -webkit-box;
+  height: 52px; overflow: hidden; display: -webkit-box;
   -webkit-line-clamp: 3; -webkit-box-orient: vertical;
 }
 .msg-label {

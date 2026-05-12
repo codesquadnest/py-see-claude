@@ -465,8 +465,8 @@ function renderStationCard(s, newPids) {
         </div>
         <div class="project-name">${escapeHtml(s.projectName)}</div>
         <div class="project-path">${escapeHtml(s.cwd)}</div>
-        ${s.messages?.length && s.messages[0].role === 'user' ? `<div class="first-prompt">${escapeHtml(s.messages[0].text.slice(0, 80))}</div>` : ''}
-        ${lastMsg ? `<div class="last-msg-preview"><span class="msg-label ${lastMsg.role === 'assistant' ? 'claude' : 'you'}">${lastMsg.role === 'assistant' ? 'Claude:' : 'You:'}</span> ${escapeHtml(lastMsg.text)}</div>` : ''}
+        <div class="first-prompt">${s.messages?.length && s.messages[0].role === 'user' ? escapeHtml(s.messages[0].text.slice(0, 80)) : ''}</div>
+        <div class="last-msg-preview">${lastMsg ? `<span class="msg-label ${lastMsg.role === 'assistant' ? 'claude' : 'you'}">${lastMsg.role === 'assistant' ? 'Claude:' : 'You:'}</span> ${escapeHtml(lastMsg.text)}` : ''}</div>
         <div class="expanded-content">
           <div class="msg-history" id="history-${s.pid}">${msgHtml}</div>
           <div class="expanded-actions">
